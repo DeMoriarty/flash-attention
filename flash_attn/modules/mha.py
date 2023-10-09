@@ -52,7 +52,7 @@ class FlashSelfAttention(nn.Module):
         self.softmax_scale = softmax_scale
         self.drop = nn.Dropout(attention_dropout)
 
-    def forward(self, qkv, causal=None, cu_seqlens=None, max_seqlen=None):
+    def forward(self, qkv, causal=None, cu_seqlens=None, max_seqlen=None, lse_penalty_coeff=0.0):
         """Implements the multihead softmax attention.
         Arguments
         ---------
@@ -83,6 +83,7 @@ class FlashSelfAttention(nn.Module):
                 max_seqlen,
                 self.drop.p if self.training else 0.0,
                 softmax_scale=self.softmax_scale,
+                lse_penalty_coeff=lse_penalty_coeff,
                 causal=causal,
             )
         else:
@@ -90,6 +91,7 @@ class FlashSelfAttention(nn.Module):
                 qkv,
                 self.drop.p if self.training else 0.0,
                 softmax_scale=self.softmax_scale,
+                lse_penalty_coeff=self.lse_penalty_coeff,
                 causal=causal,
             )
 
@@ -122,6 +124,7 @@ class FlashCrossAttention(nn.Module):
         max_seqlen=None,
         cu_seqlens_k=None,
         max_seqlen_k=None,
+        lse_penalty_coeff=0.0,
     ):
         """Implements the multihead softmax attention.
         Arguments
@@ -157,6 +160,7 @@ class FlashCrossAttention(nn.Module):
                 max_seqlen_k,
                 self.drop.p if self.training else 0.0,
                 softmax_scale=self.softmax_scale,
+                lse_penalty_coeff=lse_penalty_coeff,
                 causal=causal,
             )
         else:
@@ -169,6 +173,7 @@ class FlashCrossAttention(nn.Module):
                 self.drop.p if self.training else 0.0,
                 causal=causal,
                 softmax_scale=self.softmax_scale,
+                lse_penalty_coeff=lse_penalty_coeff,
             )
 
 
@@ -189,7 +194,7 @@ class SelfAttention(nn.Module):
         self.softmax_scale = softmax_scale
         self.drop = nn.Dropout(attention_dropout)
 
-    def forward(self, qkv, causal=None, key_padding_mask=None):
+    def forward(self, qkv, causal=None, key_padding_mask=None, lse_penalty_coeff=0.0):
         """Implements the multihead softmax attention.
         Arguments
         ---------
@@ -203,6 +208,7 @@ class SelfAttention(nn.Module):
         q, k, v = qkv.unbind(dim=2)
         softmax_scale = self.softmax_scale or 1.0 / math.sqrt(q.shape[-1])
         scores = torch.einsum("bthd,bshd->bhts", q, k * softmax_scale)
+
         if key_padding_mask is not None:
             padding_mask = torch.full(
                 (batch_size, seqlen), -10000.0, dtype=scores.dtype, device=scores.device
@@ -218,9 +224,21 @@ class SelfAttention(nn.Module):
             )
             # TD [2022-09-30]: Adding is faster than masked_fill_ (idk why, just better kernel I guess)
             scores = scores + causal_mask.to(dtype=scores.dtype)
+            
+        if lse_penalty_coeff != 0:
+            lse = torch.logsumexp(scores, dim=-1, keepdim=True)
+            if causal:
+              lse_loss = lse ** 2 * (causal_mask != -10000.0).to(lse.dtype)
+            else:
+              lse_loss = lse ** 2
+            lse_loss = lse_loss.mean()
+
         attention = torch.softmax(scores, dim=-1, dtype=v.dtype)
         attention_drop = self.drop(attention)
         output = torch.einsum("bhts,bshd->bthd", attention_drop, v)
+
+        if lse_penalty_coeff != 0:
+            return output, lse_loss
         return output
 
 
@@ -241,7 +259,7 @@ class CrossAttention(nn.Module):
         self.softmax_scale = softmax_scale
         self.drop = nn.Dropout(attention_dropout)
 
-    def forward(self, q, kv, causal=None, key_padding_mask=None):
+    def forward(self, q, kv, causal=None, key_padding_mask=None, lse_penalty_coeff=0.0):
         """Implements the multihead softmax attention.
         Arguments
         ---------
@@ -280,9 +298,20 @@ class CrossAttention(nn.Module):
             )
             causal_mask = col_idx > row_idx + sk - seqlen_q
             scores = scores.masked_fill(causal_mask, -10000.0)
+        
+        if lse_penalty_coeff != 0:
+            lse = torch.logsumexp(scores, dim=-1, keepdim=True)
+            if causal:
+              lse_loss = lse ** 2 * (causal_mask != -10000.0).to(lse.dtype)
+            else:
+              lse_loss = lse ** 2
+            lse_loss = lse_loss.mean()
+
         attention = torch.softmax(scores, dim=-1, dtype=v.dtype)
         attention_drop = self.drop(attention)
         output = torch.einsum("bhts,bshd->bthd", attention_drop, v)
+        if lse_penalty_coeff != 0:
+          return output, lse_loss
         return output
 
 

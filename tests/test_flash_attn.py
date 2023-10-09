@@ -192,6 +192,7 @@ def attention_ref(
     window_size=(-1, -1),  # -1 means infinite window size
     upcast=True,
     reorder_ops=False,
+    lse_penalty_coeff=0.0,
 ):
     """
     Arguments:
@@ -226,8 +227,11 @@ def attention_ref(
         scores = torch.einsum("bthd,bshd->bhts", q / math.sqrt(d), k)
     else:
         scores = torch.einsum("bthd,bshd->bhts", q, k / math.sqrt(d))
+    
+    final_mask = torch.ones(1, 1, 1, 1, device=scores.device, dtype=torch.bool)
     if key_padding_mask is not None:
         scores.masked_fill_(rearrange(~key_padding_mask, "b s -> b 1 1 s"), float("-inf"))
+        final_mask = final_mask & rearrange(key_padding_mask, "b s -> b 1 1 s")
     if window_size[0] >= 0 or window_size[1] >= 0:
         local_mask = construct_local_mask(
             seqlen_q,
@@ -238,6 +242,16 @@ def attention_ref(
             q.device,
         )
         scores.masked_fill_(local_mask, float("-inf"))
+        final_mask = final_mask & (~local_mask)
+
+    if lse_penalty_coeff != 0:
+      lse = torch.logsumexp(scores, dim=-1, keepdim=True)
+      if causal:
+        lse_loss = lse ** 2 * final_mask.to(lse.dtype)
+      else:
+        lse_loss = lse ** 2
+      lse_loss = lse_loss.mean()
+
     attention = torch.softmax(scores, dim=-1)
     # Some rows might be completely masked out so we fill them with zero instead of NaN
     if window_size[0] >= 0 or window_size[1] >= 0:
@@ -256,6 +270,10 @@ def attention_ref(
     output = torch.einsum("bhts,bshd->bthd", attention_drop, v * dropout_scaling)
     if query_padding_mask is not None:
         output.masked_fill_(rearrange(~query_padding_mask, "b s -> b s 1 1"), 0.0)
+    
+    if lse_penalty_coeff != 0:
+      return output.to(dtype=dtype_og), attention.to(dtype=dtype_og), lse_loss
+        
     return output.to(dtype=dtype_og), attention.to(dtype=dtype_og)
 
 
@@ -270,6 +288,7 @@ def attention_kvpacked_ref(
     window_size=(-1, -1),  # -1 means infinite window size
     upcast=True,
     reorder_ops=False,
+    lse_penalty_coeff=0.0,
 ):
     return attention_ref(
         q,
@@ -283,6 +302,7 @@ def attention_kvpacked_ref(
         causal=causal,
         window_size=window_size,
         reorder_ops=reorder_ops,
+        lse_penalty_coeff=lse_penalty_coeff,
     )
 
 
@@ -295,6 +315,7 @@ def attention_qkvpacked_ref(
     window_size=(-1, -1),  # -1 means infinite window size
     upcast=True,
     reorder_ops=False,
+    lse_penalty_coeff=0.0,
 ):
     return attention_ref(
         qkv[:, :, 0],
@@ -308,6 +329,7 @@ def attention_qkvpacked_ref(
         causal=causal,
         window_size=window_size,
         reorder_ops=reorder_ops,
+        lse_penalty_coeff=lse_penalty_coeff,
     )
 
 
@@ -1928,6 +1950,66 @@ def test_flash_attn_race_condition(seqlen_q, seqlen_k, d, dropout_p, causal, dty
             assert torch.equal(dv, dv0)
             assert torch.equal(dk, dk0)
             assert dq_equal
+
+
+@pytest.mark.parametrize("dtype", [torch.float16])
+@pytest.mark.parametrize("causal", [False, True])
+# @pytest.mark.parametrize('causal', [False])
+@pytest.mark.parametrize("d", [16, 32, 64])
+# @pytest.mark.parametrize('d', [16])
+@pytest.mark.parametrize("seqlen", [1, 2, 5, 17, 128])
+@pytest.mark.parametrize("lse_penalty_coeff", [0.0, 0.5])
+# @pytest.mark.parametrize('seqlen', [2])
+def test_flash_attn_bwd_lse_penalty(seqlen, d, causal, dtype, lse_penalty_coeff):
+    """We previously had a bug where not masking elements beyond seqlen_k caused NaN in dQ,
+    in the case where seqlen % 128 != 0.
+    """
+    device = "cuda"
+    # set seed
+    torch.random.manual_seed(0)
+    batch_size = 2
+    nheads = 5
+    q = torch.randn([batch_size, seqlen, nheads, d], dtype=dtype, device="cuda") * 5
+    k, v = [
+        torch.randn([batch_size, seqlen, nheads, d], dtype=dtype, device="cuda") * 3
+        for _ in range(2)
+    ]
+    q.requires_grad_(True)
+    k.requires_grad_(True)
+    v.requires_grad_(True)
+    out = flash_attn_func(q, k, v, causal=causal, lse_penalty_coeff=lse_penalty_coeff)
+    g = torch.randn_like(out)
+    out.backward(g)
+    q_pt = q.detach().clone().requires_grad_(True)
+    k_pt = k.detach().clone().requires_grad_(True)
+    v_pt = v.detach().clone().requires_grad_(True)
+    out_pt, _, lse_loss_pt = attention_ref(q_pt, k_pt, v_pt, causal=causal, upcast=False, reorder_ops=True, lse_penalty_coeff=lse_penalty_coeff)
+    out_pt.backward(g, retain_graph=True)
+    if lse_penalty_coeff != 0:
+      lse_loss_pt.backward()
+    q_ref = q.detach().clone().requires_grad_(True)
+    k_ref = k.detach().clone().requires_grad_(True)
+    v_ref = v.detach().clone().requires_grad_(True)
+    out_ref, attn_ref, lse_loss_ref = attention_ref(q_ref, k_ref, v_ref, causal=causal, lse_penalty_coeff=lse_penalty_coeff)
+    out_ref.backward(g, retain_graph=True)
+    if lse_penalty_coeff != 0:
+      lse_loss_ref.backward()
+    print(f"dQ max diff: {(q.grad - q_ref.grad).abs().max().item()}")
+    print(f"dK max diff: {(k.grad - k_ref.grad).abs().max().item()}")
+    print(f"dV max diff: {(v.grad - v_ref.grad).abs().max().item()}")
+    print(f"dQ Pytorch max diff: {(q_pt.grad - q_ref.grad).abs().max().item()}")
+    print(f"dK Pytorch max diff: {(k_pt.grad - k_ref.grad).abs().max().item()}")
+    print(f"dV Pytorch max diff: {(v_pt.grad - v_ref.grad).abs().max().item()}")
+    assert (out - out_ref).abs().max().item() <= 2 * (out_pt - out_ref).abs().max().item()
+    assert (q.grad - q_ref.grad).abs().max().item() <= 5 * (
+        q_pt.grad - q_ref.grad
+    ).abs().max().item() + 1e-3
+    assert (k.grad - k_ref.grad).abs().max().item() <= 5 * (
+        k_pt.grad - k_ref.grad
+    ).abs().max().item() + 1e-3
+    assert (v.grad - v_ref.grad).abs().max().item() <= 5 * (
+        v_pt.grad - v_ref.grad
+    ).abs().max().item() + 1e-3
 
 
 @pytest.mark.parametrize("dtype", [torch.float16])
