@@ -111,6 +111,7 @@ def _flash_attn_backward(
     dv,
     dropout_p,
     softmax_scale,
+    lse_penalty_coeff,
     causal,
     window_size,
     rng_state=None,
@@ -130,6 +131,7 @@ def _flash_attn_backward(
         dv,
         dropout_p,
         softmax_scale,
+        lse_penalty_coeff,
         causal,
         window_size[0],
         window_size[1],
@@ -155,6 +157,7 @@ def _flash_attn_varlen_backward(
     max_seqlen_k,
     dropout_p,
     softmax_scale,
+    lse_penalty_coeff,
     causal,
     window_size,
     rng_state=None,
@@ -178,6 +181,7 @@ def _flash_attn_varlen_backward(
         max_seqlen_k,
         dropout_p,
         softmax_scale,
+        lse_penalty_coeff,
         False,
         causal,
         window_size[0],
@@ -192,7 +196,7 @@ def _flash_attn_varlen_backward(
 
 class FlashAttnQKVPackedFunc(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, qkv, dropout_p, softmax_scale, causal, window_size, return_softmax):
+    def forward(ctx, qkv, dropout_p, softmax_scale, lse_penalty_coeff, causal, window_size, return_softmax):
         if softmax_scale is None:
             softmax_scale = qkv.shape[-1] ** (-0.5)
         out, q, k, v, out_padded, softmax_lse, S_dmask, rng_state = _flash_attn_forward(
@@ -210,6 +214,7 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
         ctx.softmax_scale = softmax_scale
         ctx.causal = causal
         ctx.window_size = window_size
+        ctx.lse_penalty_coeff = lse_penalty_coeff
         return out if not return_softmax else (out, softmax_lse, S_dmask)
 
     @staticmethod
@@ -229,6 +234,7 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
             dqkv[:, :, 2],
             ctx.dropout_p,
             ctx.softmax_scale,
+            ctx.lse_penalty_coeff,
             ctx.causal,
             ctx.window_size,
             rng_state=rng_state,
@@ -246,6 +252,7 @@ class FlashAttnVarlenQKVPackedFunc(torch.autograd.Function):
         max_seqlen,
         dropout_p,
         softmax_scale,
+        lse_penalty_coeff,
         causal,
         window_size,
         return_softmax,
@@ -272,6 +279,7 @@ class FlashAttnVarlenQKVPackedFunc(torch.autograd.Function):
         ctx.softmax_scale = softmax_scale
         ctx.causal = causal
         ctx.window_size = window_size
+        ctx.lse_penalty_coeff = lse_penalty_coeff
         return out if not return_softmax else (out, softmax_lse, S_dmask)
 
     @staticmethod
@@ -295,6 +303,7 @@ class FlashAttnVarlenQKVPackedFunc(torch.autograd.Function):
             ctx.max_seqlen,
             ctx.dropout_p,
             ctx.softmax_scale,
+            ctx.lse_penalty_coeff,
             ctx.causal,
             ctx.window_size,
             rng_state=rng_state,
@@ -305,7 +314,7 @@ class FlashAttnVarlenQKVPackedFunc(torch.autograd.Function):
 
 class FlashAttnKVPackedFunc(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, q, kv, dropout_p, softmax_scale, causal, window_size, return_softmax):
+    def forward(ctx, q, kv, dropout_p, softmax_scale, lse_penalty_coeff, causal, window_size, return_softmax):
         if softmax_scale is None:
             softmax_scale = q.shape[-1] ** (-0.5)
         out, q, k, v, out_padded, softmax_lse, S_dmask, rng_state = _flash_attn_forward(
@@ -321,6 +330,7 @@ class FlashAttnKVPackedFunc(torch.autograd.Function):
         ctx.save_for_backward(q, k, v, out_padded, softmax_lse, rng_state)
         ctx.dropout_p = dropout_p
         ctx.softmax_scale = softmax_scale
+        ctx.lse_penalty_coeff = lse_penalty_coeff
         ctx.causal = causal
         ctx.window_size = window_size
         return out if not return_softmax else (out, softmax_lse, S_dmask)
@@ -343,6 +353,7 @@ class FlashAttnKVPackedFunc(torch.autograd.Function):
             dkv[:, :, 1],
             ctx.dropout_p,
             ctx.softmax_scale,
+            ctx.lse_penalty_coeff,
             ctx.causal,
             ctx.window_size,
             rng_state=rng_state,
@@ -364,6 +375,7 @@ class FlashAttnVarlenKVPackedFunc(torch.autograd.Function):
         max_seqlen_k,
         dropout_p,
         softmax_scale,
+        lse_penalty_coeff,
         causal,
         window_size,
         return_softmax,
@@ -391,6 +403,7 @@ class FlashAttnVarlenKVPackedFunc(torch.autograd.Function):
         ctx.max_seqlen_q = max_seqlen_q
         ctx.max_seqlen_k = max_seqlen_k
         ctx.softmax_scale = softmax_scale
+        ctx.lse_penalty_coeff = lse_penalty_coeff
         ctx.causal = causal
         ctx.window_size = window_size
         return out if not return_softmax else (out, softmax_lse, S_dmask)
@@ -417,6 +430,7 @@ class FlashAttnVarlenKVPackedFunc(torch.autograd.Function):
             ctx.max_seqlen_k,
             ctx.dropout_p,
             ctx.softmax_scale,
+            ctx.lse_penalty_coeff,
             ctx.causal,
             ctx.window_size,
             rng_state=rng_state,
@@ -428,7 +442,7 @@ class FlashAttnVarlenKVPackedFunc(torch.autograd.Function):
 
 class FlashAttnFunc(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, q, k, v, dropout_p, softmax_scale, causal, window_size, return_softmax):
+    def forward(ctx, q, k, v, dropout_p, softmax_scale, lse_penalty_coeff, causal, window_size, return_softmax):
         if softmax_scale is None:
             softmax_scale = q.shape[-1] ** (-0.5)
         out, q, k, v, out_padded, softmax_lse, S_dmask, rng_state = _flash_attn_forward(
@@ -444,6 +458,7 @@ class FlashAttnFunc(torch.autograd.Function):
         ctx.save_for_backward(q, k, v, out_padded, softmax_lse, rng_state)
         ctx.dropout_p = dropout_p
         ctx.softmax_scale = softmax_scale
+        ctx.lse_penalty_coeff = lse_penalty_coeff
         ctx.causal = causal
         ctx.window_size = window_size
         return out if not return_softmax else (out, softmax_lse, S_dmask)
@@ -464,6 +479,7 @@ class FlashAttnFunc(torch.autograd.Function):
             dv,
             ctx.dropout_p,
             ctx.softmax_scale,
+            ctx.lse_penalty_coeff,
             ctx.causal,
             ctx.window_size,
             rng_state=rng_state,
@@ -487,6 +503,7 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
         max_seqlen_k,
         dropout_p,
         softmax_scale,
+        lse_penalty_coeff,
         causal,
         window_size,
         return_softmax,
@@ -514,6 +531,7 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
         ctx.max_seqlen_q = max_seqlen_q
         ctx.max_seqlen_k = max_seqlen_k
         ctx.softmax_scale = softmax_scale
+        ctx.lse_penalty_coeff = lse_penalty_coeff
         ctx.causal = causal
         ctx.window_size = window_size
         return out if not return_softmax else (out, softmax_lse, S_dmask)
@@ -538,6 +556,7 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
             ctx.max_seqlen_k,
             ctx.dropout_p,
             ctx.softmax_scale,
+            ctx.lse_penalty_coeff,
             ctx.causal,
             ctx.window_size,
             rng_state=rng_state,
@@ -552,6 +571,7 @@ def flash_attn_qkvpacked_func(
     qkv,
     dropout_p=0.0,
     softmax_scale=None,
+    lse_penalty_coeff=0.0,
     causal=False,
     window_size=(-1, -1),  # -1 means infinite context window
     return_attn_probs=False,
@@ -571,6 +591,8 @@ def flash_attn_qkvpacked_func(
         dropout_p: float. Dropout probability.
         softmax_scale: float. The scaling of QK^T before applying softmax.
             Default to 1 / sqrt(headdim).
+        lse_penalty_coeff: float. If greater than 0, apply l2 regularization on logsumexp(QK^T / softmax_scale)
+            Default to 0.
         causal: bool. Whether to apply causal attention mask (e.g., for auto-regressive modeling).
         window_size: (left, right). If not (-1, -1), implements sliding window local attention.
         return_attn_probs: bool. Whether to return the attention probabilities. This option is for
@@ -586,7 +608,7 @@ def flash_attn_qkvpacked_func(
             pattern (negative means that location was dropped, nonnegative means it was kept).
     """
     return FlashAttnQKVPackedFunc.apply(
-        qkv, dropout_p, softmax_scale, causal, window_size, return_attn_probs
+        qkv, dropout_p, softmax_scale, lse_penalty_coeff, causal, window_size, return_attn_probs
     )
 
 
@@ -595,6 +617,7 @@ def flash_attn_kvpacked_func(
     kv,
     dropout_p=0.0,
     softmax_scale=None,
+    lse_penalty_coeff=0.0,
     causal=False,
     window_size=(-1, -1),  # -1 means infinite context window
     return_attn_probs=False,
@@ -630,6 +653,8 @@ def flash_attn_kvpacked_func(
         dropout_p: float. Dropout probability.
         softmax_scale: float. The scaling of QK^T before applying softmax.
             Default to 1 / sqrt(headdim).
+        lse_penalty_coeff: float. If greater than 0, apply l2 regularization on logsumexp(QK^T / softmax_scale)
+            Default to 0.
         causal: bool. Whether to apply causal attention mask (e.g., for auto-regressive modeling).
         window_size: (left, right). If not (-1, -1), implements sliding window local attention.
         return_attn_probs: bool. Whether to return the attention probabilities. This option is for
@@ -645,7 +670,7 @@ def flash_attn_kvpacked_func(
             pattern (negative means that location was dropped, nonnegative means it was kept).
     """
     return FlashAttnKVPackedFunc.apply(
-        q, kv, dropout_p, softmax_scale, causal, window_size, return_attn_probs
+        q, kv, dropout_p, softmax_scale, lse_penalty_coeff, causal, window_size, return_attn_probs
     )
 
 
@@ -655,6 +680,7 @@ def flash_attn_func(
     v,
     dropout_p=0.0,
     softmax_scale=None,
+    lse_penalty_coeff=0.0,
     causal=False,
     window_size=(-1, -1),  # -1 means infinite context window
     return_attn_probs=False,
@@ -688,6 +714,8 @@ def flash_attn_func(
         dropout_p: float. Dropout probability.
         softmax_scale: float. The scaling of QK^T before applying softmax.
             Default to 1 / sqrt(headdim).
+        lse_penalty_coeff: float. If greater than 0, apply l2 regularization on logsumexp(QK^T / softmax_scale)
+            Default to 0.
         causal: bool. Whether to apply causal attention mask (e.g., for auto-regressive modeling).
         window_size: (left, right). If not (-1, -1), implements sliding window local attention.
         return_attn_probs: bool. Whether to return the attention probabilities. This option is for
@@ -703,7 +731,7 @@ def flash_attn_func(
             pattern (negative means that location was dropped, nonnegative means it was kept).
     """
     return FlashAttnFunc.apply(
-        q, k, v, dropout_p, softmax_scale, causal, window_size, return_attn_probs
+        q, k, v, dropout_p, softmax_scale, lse_penalty_coeff, causal, window_size, return_attn_probs
     )
 
 
@@ -713,6 +741,7 @@ def flash_attn_varlen_qkvpacked_func(
     max_seqlen,
     dropout_p=0.0,
     softmax_scale=None,
+    lse_penalty_coeff=0.0,
     causal=False,
     window_size=(-1, -1),  # -1 means infinite context window
     return_attn_probs=False,
@@ -735,6 +764,8 @@ def flash_attn_varlen_qkvpacked_func(
         dropout_p: float. Dropout probability.
         softmax_scale: float. The scaling of QK^T before applying softmax.
             Default to 1 / sqrt(headdim).
+        lse_penalty_coeff: float. If greater than 0, apply l2 regularization on logsumexp(QK^T / softmax_scale)
+            Default to 0.
         causal: bool. Whether to apply causal attention mask (e.g., for auto-regressive modeling).
         window_size: (left, right). If not (-1, -1), implements sliding window local attention.
         return_attn_probs: bool. Whether to return the attention probabilities. This option is for
@@ -755,6 +786,7 @@ def flash_attn_varlen_qkvpacked_func(
         max_seqlen,
         dropout_p,
         softmax_scale,
+        lse_penalty_coeff,
         causal,
         window_size,
         return_attn_probs,
@@ -770,6 +802,7 @@ def flash_attn_varlen_kvpacked_func(
     max_seqlen_k,
     dropout_p=0.0,
     softmax_scale=None,
+    lse_penalty_coeff=0.0,
     causal=False,
     window_size=(-1, -1),  # -1 means infinite context window
     return_attn_probs=False,
@@ -811,6 +844,8 @@ def flash_attn_varlen_kvpacked_func(
         dropout_p: float. Dropout probability.
         softmax_scale: float. The scaling of QK^T before applying softmax.
             Default to 1 / sqrt(headdim).
+        lse_penalty_coeff: float. If greater than 0, apply l2 regularization on logsumexp(QK^T / softmax_scale)
+            Default to 0.
         causal: bool. Whether to apply causal attention mask (e.g., for auto-regressive modeling).
         window_size: (left, right). If not (-1, -1), implements sliding window local attention.
         return_attn_probs: bool. Whether to return the attention probabilities. This option is for
@@ -834,6 +869,7 @@ def flash_attn_varlen_kvpacked_func(
         max_seqlen_k,
         dropout_p,
         softmax_scale,
+        lse_penalty_coeff,
         causal,
         window_size,
         return_attn_probs,
@@ -850,6 +886,7 @@ def flash_attn_varlen_func(
     max_seqlen_k,
     dropout_p=0.0,
     softmax_scale=None,
+    lse_penalty_coeff=0.0,
     causal=False,
     window_size=(-1, -1),  # -1 means infinite context window
     return_attn_probs=False,
@@ -889,6 +926,8 @@ def flash_attn_varlen_func(
         dropout_p: float. Dropout probability.
         softmax_scale: float. The scaling of QK^T before applying softmax.
             Default to 1 / sqrt(headdim).
+        lse_penalty_coeff: float. If greater than 0, apply l2 regularization on logsumexp(QK^T / softmax_scale)
+            Default to 0.
         causal: bool. Whether to apply causal attention mask (e.g., for auto-regressive modeling).
         window_size: (left, right). If not (-1, -1), implements sliding window local attention.
         return_attn_probs: bool. Whether to return the attention probabilities. This option is for
@@ -913,6 +952,7 @@ def flash_attn_varlen_func(
         max_seqlen_k,
         dropout_p,
         softmax_scale,
+        lse_penalty_coeff,
         causal,
         window_size,
         return_attn_probs,
@@ -930,6 +970,7 @@ def flash_attn_with_kvcache(
     cache_seqlens: Optional[Union[(int, torch.Tensor)]] = None,
     cache_batch_idx: Optional[torch.Tensor] = None,
     softmax_scale=None,
+    lse_penalty_coeff=0.0,
     causal=False,
     window_size=(-1, -1),  # -1 means infinite context window
     rotary_interleaved=True,
@@ -995,6 +1036,8 @@ def flash_attn_with_kvcache(
                  might come from any of the duplicate indices.
         softmax_scale: float. The scaling of QK^T before applying softmax.
             Default to 1 / sqrt(headdim).
+        lse_penalty_coeff: float. If greater than 0, apply l2 regularization on logsumexp(QK^T / softmax_scale)
+            Default to 0.
         causal: bool. Whether to apply causal attention mask (e.g., for auto-regressive modeling).
         window_size: (left, right). If not (-1, -1), implements sliding window local attention.
         rotary_interleaved: bool. Only applicable if rotary_cos and rotary_sin are passed in.
@@ -1033,6 +1076,7 @@ def flash_attn_with_kvcache(
         cache_batch_idx,
         None,
         softmax_scale,
+        lse_penalty_coeff,
         causal,
         window_size[0],
         window_size[1],

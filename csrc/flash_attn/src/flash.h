@@ -163,6 +163,7 @@ struct Flash_bwd_params : public Flash_fwd_params {
     index_t dq_head_stride;
     index_t dk_head_stride;
     index_t dv_head_stride;
+    float lse_penalty_scale;
 
     // The pointer to the softmax d sum.
     void *__restrict__ dsoftmax_sum;

@@ -147,6 +147,7 @@ void set_params_dgrad(Flash_bwd_params &params,
                       void *dsoftmax_sum_d,
                       float p_dropout,
                       float softmax_scale,
+                      float lse_penalty_coeff,
                       int window_size_left,
                       int window_size_right) {
 
@@ -189,6 +190,7 @@ void set_params_dgrad(Flash_bwd_params &params,
 
     // Softmax sum
     params.dsoftmax_sum = dsoftmax_sum_d;
+    params.lse_penalty_scale = lse_penalty_coeff * 2 / seqlen_q; // DEBUG: may or may not work, could be coeff * 2 / (seqlen_q * h * b)
 }
 
 void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, bool force_split_kernel=false) {
@@ -618,6 +620,7 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
         c10::optional<at::Tensor> &dv_,   // batch_size x seqlen_k x num_heads_k x head_size
         const float p_dropout,         // probability to drop
         const float softmax_scale,
+        const float lse_penalty_coeff,
         const bool is_causal,
         const int window_size_left,
         int window_size_right,
@@ -771,6 +774,7 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
                      softmax_d.data_ptr(),
                      p_dropout,
                      softmax_scale,
+                     lse_penalty_coeff,
                      window_size_left,
                      window_size_right);
 
@@ -826,6 +830,7 @@ mha_varlen_bwd(const at::Tensor &dout,  // total_q x num_heads, x head_size
                const int max_seqlen_k,          // max sequence length to choose the kernel
                const float p_dropout,         // probability to drop
                const float softmax_scale,
+               const float lse_penalty_coeff,
                const bool zero_tensors,
                const bool is_causal,
                const int window_size_left,
@@ -996,6 +1001,7 @@ mha_varlen_bwd(const at::Tensor &dout,  // total_q x num_heads, x head_size
                      softmax_d.data_ptr(),
                      p_dropout,
                      softmax_scale,
+                     lse_penalty_coeff,
                      window_size_left,
                      window_size_right);
 
