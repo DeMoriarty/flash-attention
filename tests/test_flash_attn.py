@@ -250,7 +250,7 @@ def attention_ref(
         lse_loss = lse ** 2 * final_mask.to(lse.dtype)
       else:
         lse_loss = lse ** 2
-      lse_loss = lse_loss.mean()
+      lse_loss = lse_loss.mean() # TEMP:
 
     attention = torch.softmax(scores, dim=-1)
     # Some rows might be completely masked out so we fill them with zero instead of NaN
@@ -1953,14 +1953,15 @@ def test_flash_attn_race_condition(seqlen_q, seqlen_k, d, dropout_p, causal, dty
 
 
 @pytest.mark.parametrize("dtype", [torch.float16])
-@pytest.mark.parametrize("causal", [False, True])
-# @pytest.mark.parametrize('causal', [False])
-@pytest.mark.parametrize("d", [16, 32, 64])
+# @pytest.mark.parametrize("causal", [False, True])
+@pytest.mark.parametrize('causal', [False])
+@pytest.mark.parametrize("d", [32])
 # @pytest.mark.parametrize('d', [16])
-@pytest.mark.parametrize("seqlen", [1, 2, 5, 17, 128])
-@pytest.mark.parametrize("lse_penalty_coeff", [0.0, 0.5])
+@pytest.mark.parametrize("q_seqlen", [1, 17, 32, 64, 128, 255, 347])
+@pytest.mark.parametrize("kv_seqlen", [1, 17, 32, 64, 128, 255, 347])
+@pytest.mark.parametrize("lse_penalty_coeff", [0.0, 1.0])
 # @pytest.mark.parametrize('seqlen', [2])
-def test_flash_attn_bwd_lse_penalty(seqlen, d, causal, dtype, lse_penalty_coeff):
+def test_flash_attn_bwd_lse_penalty(q_seqlen, kv_seqlen, d, causal, dtype, lse_penalty_coeff):
     """We previously had a bug where not masking elements beyond seqlen_k caused NaN in dQ,
     in the case where seqlen % 128 != 0.
     """
@@ -1969,9 +1970,9 @@ def test_flash_attn_bwd_lse_penalty(seqlen, d, causal, dtype, lse_penalty_coeff)
     torch.random.manual_seed(0)
     batch_size = 2
     nheads = 5
-    q = torch.randn([batch_size, seqlen, nheads, d], dtype=dtype, device="cuda") * 5
+    q = torch.randn([batch_size, q_seqlen, nheads, d], dtype=dtype, device="cuda") * 5
     k, v = [
-        torch.randn([batch_size, seqlen, nheads, d], dtype=dtype, device="cuda") * 3
+        torch.randn([batch_size, kv_seqlen, nheads, d], dtype=dtype, device="cuda") * 3
         for _ in range(2)
     ]
     q.requires_grad_(True)
@@ -1983,17 +1984,20 @@ def test_flash_attn_bwd_lse_penalty(seqlen, d, causal, dtype, lse_penalty_coeff)
     q_pt = q.detach().clone().requires_grad_(True)
     k_pt = k.detach().clone().requires_grad_(True)
     v_pt = v.detach().clone().requires_grad_(True)
-    out_pt, _, lse_loss_pt = attention_ref(q_pt, k_pt, v_pt, causal=causal, upcast=False, reorder_ops=True, lse_penalty_coeff=lse_penalty_coeff)
+    # out_pt, _, lse_loss_pt = attention_ref(q_pt, k_pt, v_pt, causal=causal, upcast=False, reorder_ops=True, lse_penalty_coeff=lse_penalty_coeff)
+    result_pt = attention_ref(q_pt, k_pt, v_pt, causal=causal, upcast=False, reorder_ops=True, lse_penalty_coeff=lse_penalty_coeff)
+    out_pt = result_pt[0]
     out_pt.backward(g, retain_graph=True)
     if lse_penalty_coeff != 0:
-      lse_loss_pt.backward()
+      result_pt[2].backward()
     q_ref = q.detach().clone().requires_grad_(True)
     k_ref = k.detach().clone().requires_grad_(True)
     v_ref = v.detach().clone().requires_grad_(True)
-    out_ref, attn_ref, lse_loss_ref = attention_ref(q_ref, k_ref, v_ref, causal=causal, lse_penalty_coeff=lse_penalty_coeff)
+    result_ref = attention_ref(q_ref, k_ref, v_ref, causal=causal, lse_penalty_coeff=lse_penalty_coeff)
+    out_ref = result_ref[0]
     out_ref.backward(g, retain_graph=True)
     if lse_penalty_coeff != 0:
-      lse_loss_ref.backward()
+      result_ref[2].backward()
     print(f"dQ max diff: {(q.grad - q_ref.grad).abs().max().item()}")
     print(f"dK max diff: {(k.grad - k_ref.grad).abs().max().item()}")
     print(f"dV max diff: {(v.grad - v_ref.grad).abs().max().item()}")

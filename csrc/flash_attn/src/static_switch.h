@@ -25,7 +25,7 @@
     }                                           \
   }()
 
-#define FP16_SWITCH(COND, ...)               \
+#define FP16_SWITCH_(COND, ...)               \
   [&] {                                      \
     if (COND) {                              \
       using elem_type = cutlass::half_t;     \
@@ -36,7 +36,14 @@
     }                                        \
   }()
 
-#define FWD_HEADDIM_SWITCH(HEADDIM, ...)   \
+// TEMP: only support half_t for now
+#define FP16_SWITCH(COND, ...)               \
+  [&] {                                      \
+    using elem_type = cutlass::half_t;       \
+    return __VA_ARGS__();                    \
+  }()
+
+#define FWD_HEADDIM_SWITCH_(HEADDIM, ...)   \
   [&] {                                    \
     if (HEADDIM <= 32) {                   \
       constexpr static int kHeadDim = 32;  \
@@ -64,3 +71,13 @@
       return __VA_ARGS__();                \
     }                                      \
   }()
+
+// TEMP: only support headdim = 32 for now
+#define FWD_HEADDIM_SWITCH(HEADDIM, ...)   \
+  [&] {                                    \
+    if (HEADDIM <= 32) {                   \
+      constexpr static int kHeadDim = 32;  \
+      return __VA_ARGS__();                \
+    }                                      \
+  }()
+

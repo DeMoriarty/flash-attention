@@ -900,15 +900,15 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
 
         // Reshape acc_dp from (MMA=4, MMA_N, MMA_N) to (col=(2, MMA_N), row=(2, MMA_N))
         Tensor dS = make_tensor(acc_dp.data(), scores.layout());
-        auto pointwise_mult = [](float p, float dp, float d, float l) {
-            // Sehban:  lse_penalty_scale = lse_penalty_coeff * 2 / mean_denom
-            return p * (l * params.lse_penalty_scale + !Is_dropout || p >= 0 ? dp - d : d);
+        auto pointwise_mult = [](float p, float dp, float d, float l, float scale) {
+            // Sehban:  scale = lse_penalty_coeff * 2 / mean_denom
+            return p * (l * scale + !Is_dropout || p >= 0 ? dp - d : d);
         };
         #pragma unroll
         for (int mi = 0; mi < size<0>(dS); ++mi) {
             #pragma unroll
             for (int ni = 0; ni < size<1>(dS); ++ni) {
-                dS(mi, ni) = pointwise_mult(scores(mi, ni), dS(mi, ni), dP_sum(mi), lse(mi));
+                dS(mi, ni) = pointwise_mult(scores(mi, ni), dS(mi, ni), dP_sum(mi), lse(mi), params.lse_penalty_scale);
             }
         }
         // if (cute::thread0()) { print(dS); }

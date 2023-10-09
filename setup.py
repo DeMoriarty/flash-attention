@@ -7,6 +7,7 @@ import ast
 from pathlib import Path
 from packaging.version import parse, Version
 import platform
+import glob
 
 from setuptools import setup, find_packages
 import subprocess
@@ -132,60 +133,14 @@ if not SKIP_CUDA_BUILD:
     # https://github.com/pytorch/pytorch/blob/8472c24e3b5b60150096486616d98b7bea01500b/torch/utils/cpp_extension.py#L920
     if FORCE_CXX11_ABI:
         torch._C._GLIBCXX_USE_CXX11_ABI = True
+
+    sources = ["csrc/flash_attn/flash_api.cpp"]
+    sources += glob.glob('csrc/flash_attn/src/*.cu')
+
     ext_modules.append(
         CUDAExtension(
             name="flash_attn_2_cuda",
-            sources=[
-                "csrc/flash_attn/flash_api.cpp",
-                "csrc/flash_attn/src/flash_fwd_hdim32_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_hdim32_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_hdim64_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_hdim64_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_hdim96_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_hdim96_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_hdim128_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_hdim128_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_hdim160_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_hdim160_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_hdim192_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_hdim192_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_hdim224_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_hdim224_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_hdim256_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_hdim256_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_bwd_hdim32_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_bwd_hdim32_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_bwd_hdim64_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_bwd_hdim64_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_bwd_hdim96_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_bwd_hdim96_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_bwd_hdim128_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_bwd_hdim128_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_bwd_hdim160_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_bwd_hdim160_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_bwd_hdim192_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_bwd_hdim192_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_bwd_hdim224_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_bwd_hdim224_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_bwd_hdim256_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_bwd_hdim256_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_split_hdim32_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_split_hdim32_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_split_hdim64_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_split_hdim64_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_split_hdim96_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_split_hdim96_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_split_hdim128_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_split_hdim128_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_split_hdim160_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_split_hdim160_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_split_hdim192_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_split_hdim192_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_split_hdim224_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_split_hdim224_bf16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_split_hdim256_fp16_sm80.cu",
-                "csrc/flash_attn/src/flash_fwd_split_hdim256_bf16_sm80.cu",
-            ],
+            sources=sources,
             extra_compile_args={
                 "cxx": ["-O3", "-std=c++17"] + generator_flag,
                 "nvcc": append_nvcc_threads(

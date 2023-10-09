@@ -16,7 +16,7 @@ DTYPE_MAP = {
 
 SM = [80]  # Sm80 kernels support up to
 # HEAD_DIMENSIONS = [32, 64, 96, 128, 160, 192, 224, 256]
-HEAD_DIMENSIONS = [32, 128]
+HEAD_DIMENSIONS = [32]
 KERNEL_IMPL_TEMPLATE_FWD = """#include "flash_fwd_launch_template.h"
 
 template<>
@@ -77,7 +77,9 @@ def write_kernel(kernel: Kernel, autogen_dir: Path) -> None:
 // Splitting the different head dimensions to different files to speed up compilation.
 // This file is auto-generated. See "generate_kernels.py"\n
 """
-    (autogen_dir / kernel.filename).write_text(prelude + kernel.template)
+    file_path = autogen_dir / kernel.filename
+    file_path.write_text(prelude + kernel.template)
+    return str(file_path)
 
 
 def main(output_dir: Optional[str]) -> None:
@@ -86,8 +88,11 @@ def main(output_dir: Optional[str]) -> None:
     else:
         output_dir = Path(output_dir)
 
+    file_paths = []
     for kernel in get_all_kernels():
-        write_kernel(kernel, output_dir)
+        file_paths.append(write_kernel(kernel, output_dir))
+    # with open(output_dir / "generated_kernel_paths.txt", "w") as f:
+    #     f.write("\n".join(file_paths))
 
 
 if __name__ == "__main__":
