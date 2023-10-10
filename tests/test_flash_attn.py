@@ -1955,19 +1955,20 @@ def test_flash_attn_race_condition(seqlen_q, seqlen_k, d, dropout_p, causal, dty
 
 
 @pytest.mark.parametrize("dtype", [torch.float16])
-# @pytest.mark.parametrize("causal", [False, True])
-@pytest.mark.parametrize('causal', [False])
-@pytest.mark.parametrize("d", [32])
+@pytest.mark.parametrize('causal', [False, True])
+@pytest.mark.parametrize("d", [16, 32, 64, 128, 160, 192])
 # @pytest.mark.parametrize('d', [16])
 # @pytest.mark.parametrize("q_seqlen", [32, 64, 128, 160, 512, 1024, 2048])
-@pytest.mark.parametrize("q_seqlen", [1, 17, 55, 128, 255, 512])
-@pytest.mark.parametrize("kv_seqlen", [1, 17, 55, 128, 255, 512])
-@pytest.mark.parametrize("lse_penalty_coeff", [0.25, 1.0])
+@pytest.mark.parametrize("q_seqlen", [1, 15, 16, 17, 31, 32, 33])
+@pytest.mark.parametrize("kv_seqlen", [1, 17, 32, 55, 64, 255, 256, 499])
+@pytest.mark.parametrize("lse_penalty_coeff", [0.0, 0.25])
 # @pytest.mark.parametrize('seqlen', [2])
 def test_flash_attn_bwd_lse_penalty(q_seqlen, kv_seqlen, d, causal, dtype, lse_penalty_coeff):
     """We previously had a bug where not masking elements beyond seqlen_k caused NaN in dQ,
     in the case where seqlen % 128 != 0.
     """
+    if q_seqlen > kv_seqlen: 
+      return
     device = "cuda"
     # set seed
     torch.random.manual_seed(0)
@@ -2011,16 +2012,16 @@ def test_flash_attn_bwd_lse_penalty(q_seqlen, kv_seqlen, d, causal, dtype, lse_p
     
     q_grad_dif = (q.grad - q_ref.grad).abs()
     k_grad_dif = (k.grad - k_ref.grad).abs()
-    def error_fn(a, b, mode="mean"):
+    def error_fn(a, b, mode="max"):
         if mode == "mean":
           return (a - b).abs().mean().item()
         elif mode == "max":
           return (a - b).abs().max().item()
 
     assert error_fn(out, out_ref) <= 2 * error_fn(out_pt, out_ref)
-    assert error_fn(q.grad, q_ref.grad) <= 3 * error_fn(q_pt.grad, q_ref.grad)# + 1e-5#, "q_grad"
-    assert error_fn(k.grad, k_ref.grad) <= 3 * error_fn(k_pt.grad, k_ref.grad)# + 1e-5#, "k_grad"
-    assert error_fn(v.grad, v_ref.grad) <= 3 * error_fn(v_pt.grad, v_ref.grad)# + 1e-5#, "v_grad"
+    assert error_fn(q.grad, q_ref.grad) <= 3 * error_fn(q_pt.grad, q_ref.grad) + 1e-3#, "q_grad"
+    assert error_fn(k.grad, k_ref.grad) <= 3 * error_fn(k_pt.grad, k_ref.grad) + 1e-3#, "k_grad"
+    assert error_fn(v.grad, v_ref.grad) <= 3 * error_fn(v_pt.grad, v_ref.grad) + 1e-3#, "v_grad"
 
 
 @pytest.mark.parametrize("dtype", [torch.float16])

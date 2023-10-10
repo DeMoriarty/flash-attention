@@ -43,7 +43,7 @@
     return __VA_ARGS__();                    \
   }()
 
-#define FWD_HEADDIM_SWITCH_(HEADDIM, ...)   \
+#define FWD_HEADDIM_SWITCH(HEADDIM, ...)   \
   [&] {                                    \
     if (HEADDIM <= 32) {                   \
       constexpr static int kHeadDim = 32;  \
@@ -73,7 +73,7 @@
   }()
 
 // TEMP: only support headdim = 32 for now
-#define FWD_HEADDIM_SWITCH(HEADDIM, ...)   \
+#define FWD_HEADDIM_SWITCH_32_ONLY(HEADDIM, ...)   \
   [&] {                                    \
     if (HEADDIM <= 32) {                   \
       constexpr static int kHeadDim = 32;  \
