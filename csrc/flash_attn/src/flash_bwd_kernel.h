@@ -902,7 +902,7 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
         Tensor dS = make_tensor(acc_dp.data(), scores.layout());
         auto pointwise_mult = [](float p, float dp, float d, float l, float scale) {
             // Sehban:  scale = lse_penalty_coeff * 2 / mean_denom
-            return p * (l * scale + !Is_dropout || p >= 0 ? dp - d : d);
+            return p * (l * scale + ( (!Is_dropout || p >= 0) ? dp - d : d) );
         };
         #pragma unroll
         for (int mi = 0; mi < size<0>(dS); ++mi) {

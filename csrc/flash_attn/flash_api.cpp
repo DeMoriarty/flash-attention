@@ -190,7 +190,7 @@ void set_params_dgrad(Flash_bwd_params &params,
 
     // Softmax sum
     params.dsoftmax_sum = dsoftmax_sum_d;
-    params.lse_penalty_scale = lse_penalty_coeff * 2 / seqlen_q; // DEBUG: may or may not work, could be coeff * 2 / (seqlen_q * h * b)
+    params.lse_penalty_scale = lse_penalty_coeff * 2 / (seqlen_q * b * h); // DEBUG: may or may not work, could be coeff * 2 / (seqlen_q * h * b)
 }
  
 void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, bool force_split_kernel=false) {

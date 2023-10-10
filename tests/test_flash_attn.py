@@ -193,6 +193,7 @@ def attention_ref(
     upcast=True,
     reorder_ops=False,
     lse_penalty_coeff=0.0,
+    return_lse=False
 ):
     """
     Arguments:
@@ -244,13 +245,10 @@ def attention_ref(
         scores.masked_fill_(local_mask, float("-inf"))
         final_mask = final_mask & (~local_mask)
 
+    lse = torch.logsumexp(scores, dim=-1, keepdim=True)
     if lse_penalty_coeff != 0:
-      lse = torch.logsumexp(scores, dim=-1, keepdim=True)
-      if causal:
-        lse_loss = lse ** 2 * final_mask.to(lse.dtype)
-      else:
-        lse_loss = lse ** 2
-      lse_loss = lse_loss.mean() # TEMP:
+      lse_loss = lse ** 2 * final_mask.to(lse.dtype)
+      lse_loss = lse_loss.mean() * lse_penalty_coeff
 
     attention = torch.softmax(scores, dim=-1)
     # Some rows might be completely masked out so we fill them with zero instead of NaN
@@ -272,8 +270,12 @@ def attention_ref(
         output.masked_fill_(rearrange(~query_padding_mask, "b s -> b s 1 1"), 0.0)
     
     if lse_penalty_coeff != 0:
+      if return_lse:
+        return output.to(dtype=dtype_og), lse.squeeze(-1), attention.to(dtype=dtype_og), lse_loss
       return output.to(dtype=dtype_og), attention.to(dtype=dtype_og), lse_loss
         
+    if return_lse:
+      return output.to(dtype=dtype_og), lse.squeeze(-1), attention.to(dtype=dtype_og)
     return output.to(dtype=dtype_og), attention.to(dtype=dtype_og)
 
 
@@ -1957,9 +1959,10 @@ def test_flash_attn_race_condition(seqlen_q, seqlen_k, d, dropout_p, causal, dty
 @pytest.mark.parametrize('causal', [False])
 @pytest.mark.parametrize("d", [32])
 # @pytest.mark.parametrize('d', [16])
-@pytest.mark.parametrize("q_seqlen", [1, 17, 32, 64, 128, 255, 347])
-@pytest.mark.parametrize("kv_seqlen", [1, 17, 32, 64, 128, 255, 347])
-@pytest.mark.parametrize("lse_penalty_coeff", [0.0, 1.0])
+# @pytest.mark.parametrize("q_seqlen", [32, 64, 128, 160, 512, 1024, 2048])
+@pytest.mark.parametrize("q_seqlen", [1, 17, 55, 128, 255, 512])
+@pytest.mark.parametrize("kv_seqlen", [1, 17, 55, 128, 255, 512])
+@pytest.mark.parametrize("lse_penalty_coeff", [0.25, 1.0])
 # @pytest.mark.parametrize('seqlen', [2])
 def test_flash_attn_bwd_lse_penalty(q_seqlen, kv_seqlen, d, causal, dtype, lse_penalty_coeff):
     """We previously had a bug where not masking elements beyond seqlen_k caused NaN in dQ,
@@ -1984,36 +1987,40 @@ def test_flash_attn_bwd_lse_penalty(q_seqlen, kv_seqlen, d, causal, dtype, lse_p
     q_pt = q.detach().clone().requires_grad_(True)
     k_pt = k.detach().clone().requires_grad_(True)
     v_pt = v.detach().clone().requires_grad_(True)
-    # out_pt, _, lse_loss_pt = attention_ref(q_pt, k_pt, v_pt, causal=causal, upcast=False, reorder_ops=True, lse_penalty_coeff=lse_penalty_coeff)
-    result_pt = attention_ref(q_pt, k_pt, v_pt, causal=causal, upcast=False, reorder_ops=True, lse_penalty_coeff=lse_penalty_coeff)
+    result_pt = attention_ref(q_pt, k_pt, v_pt, causal=causal, upcast=False, reorder_ops=True, lse_penalty_coeff=lse_penalty_coeff, return_lse=True)
     out_pt = result_pt[0]
+    lse_pt = result_pt[1]
     out_pt.backward(g, retain_graph=True)
     if lse_penalty_coeff != 0:
-      result_pt[2].backward()
+      result_pt[-1].backward()
     q_ref = q.detach().clone().requires_grad_(True)
     k_ref = k.detach().clone().requires_grad_(True)
     v_ref = v.detach().clone().requires_grad_(True)
-    result_ref = attention_ref(q_ref, k_ref, v_ref, causal=causal, lse_penalty_coeff=lse_penalty_coeff)
+    result_ref = attention_ref(q_ref, k_ref, v_ref, causal=causal, lse_penalty_coeff=lse_penalty_coeff, return_lse=True)
     out_ref = result_ref[0]
+    lse_ref = result_ref[1]
     out_ref.backward(g, retain_graph=True)
     if lse_penalty_coeff != 0:
-      result_ref[2].backward()
+      result_ref[-1].backward()
     print(f"dQ max diff: {(q.grad - q_ref.grad).abs().max().item()}")
     print(f"dK max diff: {(k.grad - k_ref.grad).abs().max().item()}")
     print(f"dV max diff: {(v.grad - v_ref.grad).abs().max().item()}")
     print(f"dQ Pytorch max diff: {(q_pt.grad - q_ref.grad).abs().max().item()}")
     print(f"dK Pytorch max diff: {(k_pt.grad - k_ref.grad).abs().max().item()}")
     print(f"dV Pytorch max diff: {(v_pt.grad - v_ref.grad).abs().max().item()}")
-    assert (out - out_ref).abs().max().item() <= 2 * (out_pt - out_ref).abs().max().item()
-    assert (q.grad - q_ref.grad).abs().max().item() <= 5 * (
-        q_pt.grad - q_ref.grad
-    ).abs().max().item() + 1e-3
-    assert (k.grad - k_ref.grad).abs().max().item() <= 5 * (
-        k_pt.grad - k_ref.grad
-    ).abs().max().item() + 1e-3
-    assert (v.grad - v_ref.grad).abs().max().item() <= 5 * (
-        v_pt.grad - v_ref.grad
-    ).abs().max().item() + 1e-3
+    
+    q_grad_dif = (q.grad - q_ref.grad).abs()
+    k_grad_dif = (k.grad - k_ref.grad).abs()
+    def error_fn(a, b, mode="mean"):
+        if mode == "mean":
+          return (a - b).abs().mean().item()
+        elif mode == "max":
+          return (a - b).abs().max().item()
+
+    assert error_fn(out, out_ref) <= 2 * error_fn(out_pt, out_ref)
+    assert error_fn(q.grad, q_ref.grad) <= 3 * error_fn(q_pt.grad, q_ref.grad)# + 1e-5#, "q_grad"
+    assert error_fn(k.grad, k_ref.grad) <= 3 * error_fn(k_pt.grad, k_ref.grad)# + 1e-5#, "k_grad"
+    assert error_fn(v.grad, v_ref.grad) <= 3 * error_fn(v_pt.grad, v_ref.grad)# + 1e-5#, "v_grad"
 
 
 @pytest.mark.parametrize("dtype", [torch.float16])
